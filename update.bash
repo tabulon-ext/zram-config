@@ -7,17 +7,17 @@ if [[ "$(id -u)" -ne 0 ]]; then
   echo "ERROR: You need to be ROOT (sudo can be used)."
   exit 1
 fi
-if ! [[ -f /usr/local/sbin/zram-config || -f /usr/sbin/zram-config ]]; then
+if ! [[ -s /usr/local/sbin/zram-config || -s /usr/sbin/zram-config ]]; then
   echo -e "ERROR: zram-config is not installed.\\nPlease run \"sudo ${BASEDIR}/install.bash\" to install zram-config instead."
   exit 1
 fi
 
-if [[ $OS == "alpine" ]] && ! [[ "$(apk info 2> /dev/null | grep -E '^(gcc|make|fts-dev|linux-headers|util-linux-misc|musl-dev)' | tr '\n' ' ')" == "fts-dev gcc make util-linux-misc musl-dev linux-headers " ]]; then
-  echo "Installing needed packages (gcc, make, fts-dev, linux-headers, util-linux-misc, musl-dev)"
-  apk add gcc make fts-dev linux-headers util-linux-misc musl-dev || exit 1
-elif ! dpkg -s 'gcc' 'make' 'libc6-dev' &> /dev/null; then
-  echo "Installing needed packages (gcc, make, libc6-dev)"
-  apt-get install --yes gcc make libc6-dev || exit 1
+if [[ $OS == "alpine" ]] && ! [[ "$(apk info 2> /dev/null | grep -E '^(gcc|meson|fts-dev|linux-headers|util-linux-misc|musl-dev)' | tr '\n' ' ')" == "fts-dev gcc meson util-linux-misc musl-dev linux-headers " ]]; then
+  echo "Installing needed packages (gcc, meson, fts-dev, linux-headers, util-linux-misc, musl-dev)"
+  apk add gcc meson fts-dev linux-headers util-linux-misc musl-dev || exit 1
+elif ! dpkg -s 'gcc' 'meson' 'libc6-dev' &> /dev/null; then
+  echo "Installing needed packages (gcc, meson, libc6-dev)"
+  apt-get install --yes gcc meson libc6-dev || exit 1
 fi
 
 if [[ $OS == "ubuntu" ]] && [[ $(bc -l <<< "$(grep -o '^VERSION_ID=.*$' /etc/os-release | cut -d'=' -f2 | tr -d '"') >= 21.10") -eq 1 ]]; then
@@ -27,13 +27,17 @@ if [[ $OS == "ubuntu" ]] && [[ $(bc -l <<< "$(grep -o '^VERSION_ID=.*$' /etc/os-
   fi
 fi
 
-git -C "$BASEDIR" fetch origin
-git -C "$BASEDIR" fetch --tags --force --prune
-git -C "$BASEDIR" clean --force -x -d
-git -C "$BASEDIR" checkout main
-git -C "$BASEDIR" reset --hard origin/main
+if [[ $1 != "custom" ]]; then
+  git -C "$BASEDIR" fetch origin
+  git -C "$BASEDIR" clean --force -x -d
+  git -C "$BASEDIR" reset --hard --recurse-submodules origin main
+  git -C "$BASEDIR" submodule update --init --recursive
+fi
 
-make --always-make --directory="${BASEDIR}/overlayfs-tools"
+rm -rf "$BASEDIR"/overlayfs-tools/builddir
+meson setup "$BASEDIR"/overlayfs-tools/builddir "$BASEDIR"/overlayfs-tools || exit 1
+meson compile -C "$BASEDIR"/overlayfs-tools/builddir || exit 1
+meson install -C "$BASEDIR"/overlayfs-tools/builddir || exit 1
 
 echo "Stopping zram-config service"
 if [[ $OS == "alpine" ]]; then
@@ -57,6 +61,7 @@ install -m 755 "$BASEDIR"/uninstall.bash /usr/local/share/zram-config/uninstall.
 if ! [[ -f /etc/ztab ]]; then
   install -m 644 "$BASEDIR"/ztab /etc/ztab
 fi
+sed -i -E 's/(\tbind_dir|\t\/\w*\.bind)//g' /etc/ztab # Remove bind_dir and /path.bind from ztab
 if ! [[ -d /usr/local/share/zram-config/log ]]; then
   mkdir -p /usr/local/share/zram-config/log
 fi
@@ -69,7 +74,6 @@ fi
 if ! [[ -d /usr/local/lib/zram-config ]]; then
   mkdir -p /usr/local/lib/zram-config
 fi
-install -m 755 "$BASEDIR"/overlayfs-tools/overlay /usr/local/lib/zram-config/overlay
 
 echo "Starting zram-config service"
 if [[ $OS == "alpine" ]]; then

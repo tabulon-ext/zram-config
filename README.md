@@ -13,7 +13,7 @@ A table located at `/etc/ztab` is used to configure any number and type of zram 
 Using the table an OverlayFS mount is used to mount the newly created zram device as the upper filesystem of the OverlayFS.
 OverlayFS is used so that files do not need to be copied from persistent storage to RAM on startup.
 In theory this should allow for faster boots and larger directories as no complete directory copy is needed.
-A modified version of [kmxz/overlayfs-tools](https://github.com/kmxz/overlayfs-tools) is used to implement the OverlayFS sync logic.
+A version of [kmxz/overlayfs-tools](https://github.com/kmxz/overlayfs-tools) is used to implement the OverlayFS sync logic.
 
 This tool is primarily developed and tested against Raspberry Pi OS.
 Any Debian derivative should also work out of the box, however there is no guarantee.
@@ -21,28 +21,13 @@ Experimental Alpine support has also been added, other distributions may work bu
 
 ## A Brief Usage Guide
 
-### Table of Contents
-
-1.  [Install](#install)
-    -   [Manually start or stop](#manually-start-or-stop)
-    -   [Sync files to disk](#sync-files-to-disk)
-2.  [Update](#update)
-3.  [Uninstall](#uninstall)
-4.  [Configure](#customize)
-    -   [Example configuration](#example-configuration)
-5.  [Is it working?](#is-it-working)
-6.  [Known issues](#known-issues)
-    -   [Conflicts with services](#conflicts-with-services)
-    -   [Swapiness on older Linux kernel versions](#swapiness-on-older-linux-kernel-versions)
-    -   [Raspberry Pi 4 8GB compatibility](#raspberry-pi-4-8gb-compatibility)
-7.  [Performance](#performance)
-8.  [Reference](#reference)
-
 ### Install
 
+The following assumes that you have the [`gh`](https://cli.github.com) cli tool installed and setup on your system.
+
 ``` shell
-sudo apt-get install git
-git clone https://github.com/ecdye/zram-config
+gh release download --repo ecdye/zram-config --pattern '*.tar.lz'
+mkdir -p zram-config && tar -xf zram-config*.tar.lz --strip-components=1 --directory=zram-config
 sudo ./zram-config/install.bash
 ```
 
@@ -69,6 +54,12 @@ Note that this sync service is not installed by default, you must install it sep
 
 ``` shell
 sudo /path/to/zram-config/update.bash
+```
+
+To make changes to the code or checkout a specific branch/tag and prevent it from updating/resetting all changes run the following instead.
+
+``` shell
+sudo /path/to/zram-config/update.bash custom
 ```
 
 ### Uninstall
@@ -99,10 +90,7 @@ Don't make it much higher than the compression algorithm (and the additional zra
 `swappiness` 150 because the improved performance of zram allows more usage without any adverse affects from the default of 60.
 It can be raised up to 200 which will improve performance in high memory pressure situations.
 
-`target_dir` is the directory you wish to hold in zram, and the original will be moved to a bind mount `bind_dir` and is synchronized on start, stop, and write commands.
-
-`bind_dir` is the directory where the original directory will be mounted for sync purposes.
-Usually in `/opt` or `/var`, name optional.
+`target_dir` is the directory you wish to hold in zram, and the original will be moved to a bind mount and is synchronized on start, stop, and write commands.
 
 `oldlog_dir` will enable log-rotation to an off device directory while retaining only live logs in zram.
 Usually in `/opt` or `/var`, name optional.
@@ -117,11 +105,11 @@ Once finished, start zram using `sudo systemctl start zram-config.service` or `s
 # swap	alg		mem_limit	disk_size	swap_priority	page-cluster	swappiness
 swap	lzo-rle		250M		750M		75		0		150
 
-# dir	alg		mem_limit	disk_size	target_dir		bind_dir
-#dir	lzo-rle		50M		150M		/home/pi		/opt/zram/pi.bind
+# dir	alg		mem_limit	disk_size	target_dir
+#dir	lzo-rle		50M		150M		/home/pi
 
-# log	alg		mem_limit	disk_size	target_dir		bind_dir		oldlog_dir
-log	lzo-rle		50M		150M		/var/log		/opt/zram/log.bind	/opt/zram/oldlog
+# log	alg		mem_limit	disk_size	target_dir	oldlog_dir
+log	lzo-rle		50M		150M		/var/log	/opt/zram/oldlog
 ```
 
 ### Is it working?
@@ -187,6 +175,29 @@ The Raspberry Pi 4 8GB model can exhibit issues with zram due to a Linux kernel 
 This bug has been fixed as of Raspberry Pi Kernel version 1.20210527.
 See [raspberrypi/linux@cef3970381](https://github.com/raspberrypi/linux/commit/cef397038167ac15d085914493d6c86385773709) for more details about the issue.
 
+#### Filesystem compatibility
+
+By default zram-config should support most regular filesystems, as long as the tools are installed and available on the host system.
+In some cases, with niche filesystems some manual editing of the code may be required to enable support.
+
+Pull requests adding support for filesystems that don't work automatically are welcome.
+
+#### Compatibility issues in virtual machines
+
+When running zram-config in a virtual machine (VM), you may encounter compatibility issues due to the differences in how VMs handle memory and storage compared to physical hardware.
+Performance may vary, and certain features might not work as expected.
+It is also common for VMs to not have implemented emulation in their kernel for zram.
+If you experience issues, it may be better to not use zram-config in your VM environment.
+It is recommended to thoroughly test zram-config in your specific VM setup to ensure it meets your needs.
+
+#### Removal of `bind_dir` in `ztab`
+
+Older versions of zram-config included the option to manually configure a `bind_dir` in the `ztab`.
+This functionality was removed in favor of automatically creating a bind mount as it is less confusing and more consistent with the rest of the code.
+
+Checks are in place to automatically convert `ztab` to this new format.
+If errors occur, you may need to manually edit `ztab` to fix any issues.
+
 ### Performance
 
 LZO-RLE offers the best performance and is probably the best choice, and from kernel 5.1 and onward it is the default.
@@ -195,18 +206,7 @@ You might have text based low impact directories such as `/var/log` or `/var/cac
 With `/tmp` and `/run`, zram is unnecessary because they are RAM mounted as `tmpfs` and, if memory gets short, then the zram swap will provide extra.
 It is only under intense loads that the slight overhead of zram compression becomes noticeable.
 
-This chart from [facebook/zstd](https://github.com/facebook/zstd) provides a good benchmark for the performance of the different compressors.
-
-| Compressor name  | Ratio | Compression | Decompression |
-|:-----------------|------:|------------:|--------------:|
-| zstd 1.5.1 -1    | 2.887 |    530 MB/s |     1700 MB/s |
-| zlib 1.2.11 -1   | 2.743 |     95 MB/s |      400 MB/s |
-| brotli 1.0.9 -0  | 2.702 |    395 MB/s |      450 MB/s |
-| quicklz 1.5.0 -1 | 2.238 |    540 MB/s |      760 MB/s |
-| lzo1x 2.10 -1    | 2.106 |    660 MB/s |      845 MB/s |
-| lz4 1.9.3        | 2.101 |    740 MB/s |     4500 MB/s |
-| lzf 3.6 -1       | 2.077 |    410 MB/s |      830 MB/s |
-| snappy 1.1.9     | 2.073 |    550 MB/s |     1750 MB/s |
+This chart in [facebook/zstd](https://github.com/facebook/zstd?tab=readme-ov-file#benchmarks) provides a good reference for the performance of the different compressors.
 
 ### Reference
 
